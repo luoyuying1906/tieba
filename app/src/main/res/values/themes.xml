@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Compose 自己负责配色，这里只要一个「无 ActionBar」的宿主主题即可。
+      用 android: 前缀的系统主题，可以少引一个 com.google.android.material 依赖。
+    -->
+    <style name="Theme.TiebaSearch" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>

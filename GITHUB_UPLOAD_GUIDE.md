@@ -226,7 +226,52 @@ jobs:
 
 ## 常见问题
 
+### ❌ 报错 `chmod: 无法访问 'gradlew': 没有此类文件或目录`
+
+**这不是缺少 gradlew 文件导致的，而是你跑的工作流不是本教程给的那个。**
+
+GitHub 在 Actions 页面会自动推荐一个叫 **"Android CI"** 的模板，它里面有这么两步：
+
+```yaml
+- name: Grant execute permission for gradlew
+  run: chmod +x gradlew
+- name: Build with Gradle
+  run: ./gradlew build
+```
+
+**本教程的 `build-apk.yml` 从头到尾没有出现过 `gradlew`**，它用的是 `gradle assembleDebug`。
+
+**两条必须知道的事**：
+
+1. 光有 `gradlew` / `gradlew.bat` 两个脚本**不能工作**，它们还需要
+   `gradle/wrapper/gradle-wrapper.jar`（约 43KB 的编译后二进制）。
+   只补脚本的话，`chmod` 那步会过，但下一步会变成新错误：
+   `Could not find or load main class org.gradle.wrapper.GradleWrapperMain`
+2. **"Android CI" 模板即使跑成功了，你也拿不到 APK。**
+   它执行的是 `./gradlew build`（跑编译 + 检查 + 测试），而且**没有上传产物的步骤**，
+   Artifacts 区域会是空的。
+
+**正确做法（3 步）**：
+
+1. 打开仓库的 **Actions** 页面，看左侧是不是有**两个**工作流：
+   - `Android CI` ← 这个要删掉
+   - `Build APK` ← 这个是你该用的
+2. 删掉 `Android CI`：进 `.github/workflows/` 目录，把 `android.yml`（或 `android-ci.yml`）
+   点进去 → 右上角 **⋯** → **Delete file** → Commit
+3. 确认 `build-apk.yml` 还在，然后重新运行它：
+   Actions → 左侧 **Build APK** → 右侧 **Run workflow**
+
+> 顺带说明：项目里现在也放了 `gradlew` / `gradlew.bat` / `gradle/wrapper/gradle-wrapper.properties` /
+> `.gitattributes`，但那个 **jar 我没法生成**（它是二进制，我运行的环境 HTTPS 被沙箱挡着，下载不了）。
+> `build-apk.yml` 里加了一步 `gradle wrapper`，会在 CI 里自动把它补齐，
+> 所以你以后想在自己电脑上跑 `./gradlew` 也是可以的。
+
+---
+
+### 其它常见问题
+
 **Q：为什么不直接给我 APK？**
+
 我运行的环境里没有 JDK、Android SDK、Gradle，shell 的 HTTPS 还被沙箱挡着，
 装齐这套工具链要下约 2GB 且需要写入你磁盘的其他位置。用 GitHub Actions 零成本、成功率更高。
 
