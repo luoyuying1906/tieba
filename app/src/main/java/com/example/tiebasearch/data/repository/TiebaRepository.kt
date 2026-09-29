@@ -92,7 +92,10 @@ class TiebaRepository(private val api: TiebaApi = TiebaApi()) {
                     filteredOut++
                     continue
                 }
-                byPostId.putIfAbsent(post.postId, post)
+                // 用 getOrPut 而不是 putIfAbsent：
+                // Kotlin 的 MutableMap 接口并不保证暴露 JDK 的 putIfAbsent，
+                // getOrPut 是 Kotlin 标准库自有函数，语义完全一致（存在则返回旧值、不覆盖）。
+                byPostId.getOrPut(post.postId) { post }
             }
 
             hasMore = resp.data.hasMore == 1

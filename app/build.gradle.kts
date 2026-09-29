@@ -50,7 +50,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    // 刻意不引入 material-icons-extended：
+    // 该依赖在部分 Compose BOM 版本中已被移除，会出现 "Could not find ...:material-icons-extended:" 的
+    // 依赖解析失败。本项目只用了一个图标，改用 material3 自带的核心图标即可。
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // --- 网络 ---

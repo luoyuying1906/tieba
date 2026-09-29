@@ -21,7 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -66,7 +66,9 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                 title = { Text("贴吧搜索") },
                 actions = {
                     IconButton(onClick = { vm.exportDebugDump() }) {
-                        Icon(Icons.Default.BugReport, contentDescription = "导出原始响应(自检)")
+                        // 用核心图标 Build，不用 BugReport —— 后者属于 material-icons-extended，
+                        // 而那个依赖在部分 Compose BOM 版本里已被移除，会引发依赖解析失败。
+                        Icon(Icons.Default.Build, contentDescription = "导出原始响应(自检)")
                     }
                 }
             )

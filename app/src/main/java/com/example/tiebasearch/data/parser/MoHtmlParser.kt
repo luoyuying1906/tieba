@@ -82,10 +82,13 @@ object MoHtmlParser {
         val out = mutableListOf<Floor>()
 
         // 楼层正文在移动版里通常是 class 含 "p_content" / "d_post_content" 的块；
-        // 拿不到就退化为「找所有含正文长度的 div」。
-        val contentNodes: Elements = doc.select(
+        // 拿不到就退化为「找所有 div」。
+        // 这里刻意写成显式 if，不用 Collection.ifEmpty —— 它的泛型约束
+        // (C : Collection<*>, C : R) 在 Elements 上能否推断成功依赖版本，不值得冒险。
+        val byClass: Elements = doc.select(
             "[class*=\"p_content\"], [class*=\"d_post_content\"], [class*=\"post_content\"]"
-        ).ifEmpty { doc.select("div") }
+        )
+        val contentNodes: Elements = if (byClass.isNotEmpty()) byClass else doc.select("div")
 
         for (node in contentNodes) {
             val content = node.text().trim()

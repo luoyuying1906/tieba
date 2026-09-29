@@ -79,7 +79,7 @@ data class SearchPostDto(
     /** 帖子在网页版的地址 */
     @SerialName("pb_url") val pbUrl: String = "",
     val media: List<MediaDto>? = null,
-    @SerialName("comment_list") val commentList: List<CommentDto>? = null,
+    @Serializable(with = FlexibleIntSerializer::class)
     val type: Int = 0
 ) {
     /** 时间字段有多个，按可靠性依次回退 */
@@ -122,6 +122,7 @@ data class ForumInfoDto(
     /** 注意这里是「15.5W」这种字符串，不是数字 */
     @SerialName("post_num") val postNum: String = "",
     @SerialName("concern_num") val concernNum: String = "",
+    @Serializable(with = FlexibleIntSerializer::class)
     @SerialName("is_official_forum") val isOfficialForum: Int = 0
 )
 
@@ -136,13 +137,4 @@ data class MediaDto(
     @SerialName("small_pic") val smallPic: String = "",
     @SerialName("big_pic") val bigPic: String = "",
     @SerialName("water_pic") val waterPic: String = ""
-)
-
-@Serializable
-data class CommentDto(
-    val title: String = "",
-    val content: String = "",
-    val tid: String = "",
-    val pid: String = "",
-    val user: UserDto? = null
 )
