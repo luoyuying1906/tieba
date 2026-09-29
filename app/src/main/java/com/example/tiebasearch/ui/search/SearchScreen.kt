@@ -1,7 +1,5 @@
 package com.example.tiebasearch.ui.search
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,8 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -32,17 +28,20 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,24 +49,59 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.example.tiebasearch.domain.model.TiebaPost
 import com.example.tiebasearch.util.TimeFormat
+import com.example.tiebasearch.util.UrlOpener
+
+/** 请求间隔预设。改成"按钮组"而不是滑块，是为了避开 Slider 在 Material3 里
+ *  存在多个重载、按名字传参可能产生解析歧义的风险。 */
+private val INTERVAL_PRESETS = listOf(300L, 800L, 1500L, 3000L)
+
+@Composable
+fun SearchScreen(vm: SearchViewModel = viewModel()) {
+    val state by vm.state.collectAsStateWithLifecycle()
+
+    if (state.selectedPost != null) {
+        // 详情页。用一个状态切换代替导航库 —— 少一个依赖就少一分构建风险。
+        PostDetailScreen(
+            state = state,
+            onBack = vm::closeDetail,
+            onLoadFull = vm::loadFullThread
+        )
+    } else {
+        SearchListScreen(
+            state = state,
+            onKeywordChange = vm::onKeywordChange,
+            onIntervalChange = vm::onIntervalChange,
+            onSearch = vm::search,
+            onLoadMore = vm::loadMore,
+            onOpenDetail = vm::openDetail,
+            onExportDump = vm::exportDebugDump,
+            onDismiss = vm::dismissMessages
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(vm: SearchViewModel = viewModel()) {
-
-    val state by vm.state.collectAsStateWithLifecycle()
-
+private fun SearchListScreen(
+    state: SearchUiState,
+    onKeywordChange: (String) -> Unit,
+    onIntervalChange: (Long) -> Unit,
+    onSearch: () -> Unit,
+    onLoadMore: () -> Unit,
+    onOpenDetail: (TiebaPost) -> Unit,
+    onExportDump: () -> Unit,
+    onDismiss: () -> Unit
+) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("贴吧搜索") },
+                title = { Text("贴吧全网搜索") },
                 actions = {
-                    IconButton(onClick = { vm.exportDebugDump() }) {
-                        // 用核心图标 Build，不用 BugReport —— 后者属于 material-icons-extended，
-                        // 而那个依赖在部分 Compose BOM 版本里已被移除，会引发依赖解析失败。
+                    IconButton(onClick = onExportDump) {
+                        // 核心图标 Build，不用 BugReport（后者属于 material-icons-extended，
+                        // 那个依赖在部分 Compose BOM 版本里已被移除）
                         Icon(Icons.Default.Build, contentDescription = "导出原始响应(自检)")
                     }
                 }
@@ -79,15 +113,14 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            SearchBar(
+            SearchHeader(
                 state = state,
-                onForumChange = vm::onForumChange,
-                onKeywordChange = vm::onKeywordChange,
-                onStrictChange = vm::onStrictChange,
-                onSearch = vm::search
+                onKeywordChange = onKeywordChange,
+                onIntervalChange = onIntervalChange,
+                onSearch = onSearch
             )
 
-            MessageBar(state, onDismiss = vm::dismissMessages)
+            MessageBar(state, onDismiss)
 
             Box(modifier = Modifier.fillMaxSize()) {
                 when {
@@ -105,13 +138,13 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(state.posts, key = { it.postId }) { post ->
-                                PostCard(post)
+                                PostCard(post = post, onOpenDetail = onOpenDetail)
                             }
                             item {
                                 LoadMoreFooter(
                                     hasMore = state.hasMore,
                                     loading = state.isLoadingMore,
-                                    onLoadMore = vm::loadMore
+                                    onLoadMore = onLoadMore
                                 )
                             }
                         }
@@ -125,55 +158,90 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
 // ------------------------------------------------------------------ 搜索区
 
 @Composable
-private fun SearchBar(
+private fun SearchHeader(
     state: SearchUiState,
-    onForumChange: (String) -> Unit,
     onKeywordChange: (String) -> Unit,
-    onStrictChange: (Boolean) -> Unit,
+    onIntervalChange: (Long) -> Unit,
     onSearch: () -> Unit
 ) {
+    // 设置默认收起，不占地方
+    var showSettings by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        OutlinedTextField(
-            value = state.forumInput,
-            onValueChange = onForumChange,
-            label = { Text("选择贴吧") },
-            placeholder = { Text("例如：诡秘之主吧") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        OutlinedTextField(
-            value = state.keywordInput,
-            onValueChange = onKeywordChange,
-            label = { Text("关键词") },
-            placeholder = { Text("例如：诡秘之主") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-            modifier = Modifier.fillMaxWidth()
-        )
-
+        // 需求一：只剩一个关键词输入框，不再有「选择贴吧」
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = state.strictForumOnly, onCheckedChange = onStrictChange)
+            OutlinedTextField(
+                value = state.keywordInput,
+                onValueChange = onKeywordChange,
+                label = { Text("关键词") },
+                placeholder = { Text("例如：诡秘之主") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                modifier = Modifier.weight(1f)
+            )
             Spacer(Modifier.width(8.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("只显示指定吧的帖子", fontSize = 14.sp)
-                Text(
-                    "贴吧搜索接口本身是全吧搜索，勾选后按「来源吧名」本地过滤",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
             Button(onClick = onSearch, enabled = state.canSearch) {
-                Icon(Icons.Default.Search, contentDescription = null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(4.dp))
                 Text("搜索")
             }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { showSettings = !showSettings }) {
+                Text(
+                    text = (if (showSettings) "▾ " else "▸ ") + "请求间隔 ${state.intervalMs}ms",
+                    fontSize = 12.sp
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "全网搜索",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        if (showSettings) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                INTERVAL_PRESETS.forEach { ms ->
+                    val selected = state.intervalMs == ms
+                    if (selected) {
+                        Button(
+                            onClick = { onIntervalChange(ms) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("$ms", fontSize = 11.sp, maxLines = 1)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onIntervalChange(ms) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("$ms", fontSize = 11.sp, maxLines = 1)
+                        }
+                    }
+                }
+            }
+            Text(
+                text = "两次请求之间的最小间隔（毫秒）。数值越大越不容易被百度风控；" +
+                    "如果出现「触发安全验证」，请调大后重试。设置会自动保存。",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -188,33 +256,12 @@ private fun MessageBar(state: SearchUiState, onDismiss: () -> Unit) {
     }
 }
 
-@Composable
-private fun MessageStrip(text: String, bg: Color, onDismiss: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(bg)
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(text, fontSize = 12.sp, modifier = Modifier.weight(1f))
-        Text(
-            "关闭",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .padding(start = 8.dp)
-                .clickable(onClick = onDismiss)
-        )
-    }
-}
-
 // ------------------------------------------------------------------ 结果卡片
 
 @Composable
-private fun PostCard(post: TiebaPost) {
+private fun PostCard(post: TiebaPost, onOpenDetail: (TiebaPost) -> Unit) {
+    val context = LocalContext.current
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -222,49 +269,13 @@ private fun PostCard(post: TiebaPost) {
         Column(modifier = Modifier.padding(12.dp)) {
 
             // ---- 【发帖人】 ----
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    if (post.avatarUrl.isNotBlank()) {
-                        AsyncImage(
-                            model = post.avatarUrl,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = post.authorDisplay,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = buildString {
-                            if (post.authorName.isNotBlank()) append("用户名 ${post.authorName}  ·  ")
-                            append("UID ${post.authorStableId}")
-                        },
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
+            AuthorRow(post)
 
             Spacer(Modifier.height(8.dp))
 
             // ---- 【时间】+【来自XX吧】 ----
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Tag("时间 " + TimeFormat.humanize(post.createdAt))
-                Spacer(Modifier.width(6.dp))
                 Tag("来自${post.forumName}吧", highlight = true)
             }
 
@@ -272,7 +283,7 @@ private fun PostCard(post: TiebaPost) {
             HorizontalDivider()
             Spacer(Modifier.height(8.dp))
 
-            // ---- 【帖子内容】 ----
+            // ---- 【帖子内容】列表里只显示摘要，避免卡片过长 ----
             if (post.title.isNotBlank()) {
                 Text(
                     text = post.title,
@@ -291,6 +302,27 @@ private fun PostCard(post: TiebaPost) {
                 overflow = TextOverflow.Ellipsis
             )
 
+            Spacer(Modifier.height(10.dp))
+
+            // ---- 需求二 + 需求三：两个按钮 ----
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onOpenDetail(post) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("展开全文")
+                }
+                Button(
+                    onClick = { UrlOpener.open(context, post.webUrl) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("查看原帖", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
             Text(
                 text = "回复 ${post.replyCount}  ·  点赞 ${post.likeCount}  ·  tid ${post.threadId}",
@@ -299,25 +331,6 @@ private fun PostCard(post: TiebaPost) {
             )
         }
     }
-}
-
-@Composable
-private fun Tag(text: String, highlight: Boolean = false) {
-    val bg = if (highlight) MaterialTheme.colorScheme.primaryContainer
-    else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (highlight) MaterialTheme.colorScheme.onPrimaryContainer
-    else MaterialTheme.colorScheme.onSurfaceVariant
-
-    Text(
-        text = text,
-        fontSize = 11.sp,
-        color = fg,
-        maxLines = 1,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(bg)
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-    )
 }
 
 @Composable
@@ -346,13 +359,18 @@ private fun EmptyHint(modifier: Modifier = Modifier) {
         modifier = modifier.padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("输入吧名和关键词开始搜索", fontSize = 14.sp)
+        Text("输入关键词开始搜索", fontSize = 14.sp)
         Spacer(Modifier.height(6.dp))
         Text(
-            "例：吧名「诡秘之主吧」+ 关键词「诡秘之主」",
+            "已取消吧名限制，直接在全部贴吧里搜索",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "例：诡秘之主",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
-

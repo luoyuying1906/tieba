@@ -2,6 +2,7 @@ package com.example.tiebasearch.data.mapper
 
 import com.example.tiebasearch.data.parser.MoHtmlParser
 import com.example.tiebasearch.data.remote.dto.SearchPostDto
+import com.example.tiebasearch.domain.model.TiebaFloor
 import com.example.tiebasearch.domain.model.TiebaPost
 
 /**
@@ -34,31 +35,14 @@ fun SearchPostDto.toDomain(): TiebaPost {
     )
 }
 
-fun MoHtmlParser.ThreadBrief.toDomain(forumName: String, floors: List<MoHtmlParser.Floor>): TiebaPost {
-    // 楼层页里首个「楼主」楼层 = 主楼，正文以它为准
-    val op = floors.firstOrNull { it.isOp } ?: floors.firstOrNull()
-    val body = op?.content.orEmpty()
-    return TiebaPost(
-        postId = op?.pid?.toLongOrNull() ?: urlSafeHash(tid),
-        threadId = tid.toLongOrNull() ?: 0L,
-        title = title,
-        content = body.ifBlank { title },
-        authorUserId = null,                 // HTML 页面拿不到数字 UID，只有昵称
-        authorName = "",
-        authorNickname = op?.authorName?.ifBlank { authorName }.orEmpty(),
-        createdAt = op?.epochSeconds ?: epochSeconds,
-        modifiedAt = null,
-        forumName = forumName,
-        forumId = null,
-        replyCount = replyCount,
-        likeCount = 0,
-        avatarUrl = "",
-        threadUrl = "https://tieba.baidu.com/p/$tid",
-        firstImageUrl = null,
-        source = if (floors.isEmpty()) TiebaPost.DataSource.HTML_FORUM_CRAWL
-        else TiebaPost.DataSource.HTML_THREAD_DETAIL
-    )
-}
+/** HTML 楼层 → 领域模型（详情页「加载完整正文」用） */
+fun MoHtmlParser.Floor.toDomain(): TiebaFloor = TiebaFloor(
+    floorId = pid,
+    content = content,
+    authorName = authorName,
+    createdAt = epochSeconds,
+    isOp = isOp
+)
 
 /**
  * pid 缺失时的兜底唯一键。

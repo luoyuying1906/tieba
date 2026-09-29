@@ -6,13 +6,15 @@ package com.example.tiebasearch.domain.model
  * 注意区分三种「发帖人标识」，很多人会在这里搞混：
  *   - authorNickname  昵称     —— 用户可见、**随时可改**，界面上主要显示这个
  *   - authorName      用户名   —— 登录名，不可改，但**实测经常返回空字符串**（用户设置了隐私）
- *   - authorId        数字UID  —— 永久唯一，是「用户ID」最标准的答案；缺失时退化为头像 hash
+ *   - authorUserId    数字UID  —— 永久唯一，是「用户ID」最标准的答案；缺失时退化为头像 hash
  */
 data class TiebaPost(
     /** 楼层 id，列表去重用的最小唯一键 */
     val postId: Long,
     val threadId: Long,
     val title: String,
+    /** 搜索接口返回的正文。⚠️ 实测这是**被截断的摘要**（长文末尾会出现「（ps:」这种断口），
+     *  想看全文要用 [TiebaRepository.loadThreadFloors] 按 tid 再抓一次。 */
     val content: String,
 
     /** 数字 UID，可能为 null（接口没给） */
@@ -36,7 +38,7 @@ data class TiebaPost(
     val threadUrl: String,
     val firstImageUrl: String?,
 
-    /** 数据来源，调试/排查时很有用：告诉你是哪条策略抓到的 */
+    /** 数据来源，调试/排查时很有用 */
     val source: DataSource
 ) {
     /** 作者唯一标识：UID 优先，退化到头像 hash */
@@ -50,6 +52,20 @@ data class TiebaPost(
     val authorDisplay: String
         get() = authorNickname.ifBlank { authorName }.ifBlank { "（用户名不可见）" }
 
+    /**
+     * 给浏览器打开用的**干净**原帖地址。
+     *
+     * 刻意统一成 https://tieba.baidu.com/p/{tid}，而不是直接用接口返回的 pb_url：
+     * pb_url 形如 `...?tid=xxx&jump_tieba_native=1`，那个 jump_tieba_native 参数
+     * 会诱导系统直接唤起「百度贴吧 App」而不是浏览器，和用户点这个按钮的预期不符。
+     */
+    val webUrl: String
+        get() = if (threadId > 0) "https://tieba.baidu.com/p/$threadId" else threadUrl
+
+    /** 正文是否疑似被接口截断 */
+    val mayBeTruncated: Boolean
+        get() = content.length >= 90 || content.endsWith("（ps:") || content.endsWith("...")
+
     enum class DataSource {
         /** 主路径：/mo/q/search/thread JSON 接口 */
         JSON_SEARCH,
@@ -60,18 +76,12 @@ data class TiebaPost(
     }
 }
 
-/** 一次搜索的入参 */
-data class SearchQuery(
-    /** 吧名，例如「诡秘之主吧」。留空 = 全吧搜索 */
-    val forumName: String = "",
-    /** 关键词，例如「诡秘之主」 */
-    val keyword: String = "",
-    /** 是否严格只保留目标吧的结果 */
-    val strictForumOnly: Boolean = true
-) {
-    val isValid: Boolean get() = keyword.isNotBlank()
-
-    /** 贴吧接口里 kw 不带「吧」字，需要做归一化 */
-    val normalizedForum: String
-        get() = forumName.trim().removeSuffix("吧").trim()
-}
+/** 帖子楼层（详情页「加载完整正文」时用） */
+data class TiebaFloor(
+    val floorId: String?,
+    val content: String,
+    val authorName: String,
+    val createdAt: Long?,
+    /** 是否为楼主（主楼） */
+    val isOp: Boolean
+)

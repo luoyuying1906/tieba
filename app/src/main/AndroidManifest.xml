@@ -4,6 +4,22 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!--
+      Android 11 (API 30) 起有「软件包可见性」限制。
+      不声明这段的话，某些设备上解析 ACTION_VIEW 会失败，
+      导致「查看原帖」按钮点了没反应。声明后系统知道我们要处理 http/https 链接。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:label="贴吧搜索"
