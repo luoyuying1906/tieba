@@ -81,7 +81,14 @@ data class TiebaFloor(
     val floorId: String?,
     val content: String,
     val authorName: String,
+    val avatarUrl: String?,
     val createdAt: Long?,
-    /** 是否为楼主（主楼） */
-    val isOp: Boolean
+    /** 楼主标识：页面里带「楼主」角标，或主楼（没有 pid） */
+    val isOp: Boolean,
+    /**
+     * 楼层号。
+     * 贴吧移动版里作者名后面那个数字是**吧内等级**不是楼层号，
+     * 所以解析器优先找「N楼」这种明确文本，找不到就按解析顺序编号。
+     */
+    val floorNumber: Int?
 )

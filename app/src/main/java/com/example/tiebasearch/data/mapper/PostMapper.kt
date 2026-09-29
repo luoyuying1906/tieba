@@ -40,8 +40,10 @@ fun MoHtmlParser.Floor.toDomain(): TiebaFloor = TiebaFloor(
     floorId = pid,
     content = content,
     authorName = authorName,
+    avatarUrl = avatarUrl,
     createdAt = epochSeconds,
-    isOp = isOp
+    isOp = isOp,
+    floorNumber = floorNumber
 )
 
 /**

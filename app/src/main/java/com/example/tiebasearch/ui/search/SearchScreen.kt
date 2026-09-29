@@ -80,7 +80,8 @@ fun SearchScreen(
             state = state,
             onBack = vm::closeDetail,
             onLoadFull = vm::loadFullThread,
-            onRetrySummary = vm::retrySummary
+            onRetrySummary = vm::retrySummary,
+            onExportDiagnostics = vm::exportThreadDiagnostics
         )
     } else {
         SearchListScreen(

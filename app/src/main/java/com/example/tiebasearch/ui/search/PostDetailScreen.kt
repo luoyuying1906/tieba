@@ -1,7 +1,6 @@
 package com.example.tiebasearch.ui.search
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,10 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,25 +33,28 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.tiebasearch.domain.model.TiebaFloor
+import com.example.tiebasearch.domain.model.TiebaPost
 import com.example.tiebasearch.util.TimeFormat
 import com.example.tiebasearch.util.UrlOpener
 
 /**
- * 帖子详情页。
+ * 帖子详情页（重构版）。
  *
- * 从上到下：
- *   1. 【需求四】AI 总结卡片 —— 进入页面即自动触发（命中缓存则不调 API）
- *   2. 作者 / 时间 / 来源吧
- *   3. 标题 + 正文（整页可滚动，不截断）
- *   4. 「加载完整正文」—— 按 tid 抓帖子页，补全被接口截断的内容
- *   5. 【需求三】完整楼层列表
- *   6. 【需求二/三】整宽的「在浏览器中打开原帖」按钮
+ * 结构从上到下：
+ *   1. AI 总结卡片（需求四，保留在页面最顶部）
+ *   2. **主贴卡片** —— 楼主正文单独一张卡，不再和回复混在一起
+ *   3. 「加载完整正文」按钮 + 状态提示
+ *   4. **回复楼层卡片列表** —— 每一层一张独立卡片（朋友圈那种感觉），
+ *      显示 楼层号 / 发帖人 / 时间 / 本层内容
+ *   5. 整宽的「在浏览器中打开原帖」
+ *
+ * 另外顶栏有个 🐞 按钮：解析不出楼层时会导出「结构诊断」，
+ * 那段文本很短，可以复制发我，我就能定位该用什么选择器。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,13 +62,20 @@ fun PostDetailScreen(
     state: SearchUiState,
     onBack: () -> Unit,
     onLoadFull: () -> Unit,
-    onRetrySummary: () -> Unit
+    onRetrySummary: () -> Unit,
+    onExportDiagnostics: () -> Unit
 ) {
     val post = state.selectedPost ?: return
     val context = LocalContext.current
 
-    // 让系统返回键也能退回列表页，而不是直接退出 App
+    // 系统返回键也能退回列表页，而不是直接退出 App
     BackHandler(onBack = onBack)
+
+    val floors = state.detailFloors
+    // 主贴 = 第一个带「楼主」标记的楼层，没有就取第一层
+    val mainIndex = floors.indexOfFirst { it.isOp }.let { if (it >= 0) it else 0 }
+    val mainFloor = floors.getOrNull(mainIndex)
+    val replies = floors.filterIndexed { i, _ -> i != mainIndex }
 
     Scaffold(
         topBar = {
@@ -74,6 +84,11 @@ fun PostDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onExportDiagnostics) {
+                        Icon(Icons.Default.Build, contentDescription = "结构诊断(解析不出楼层时用)")
                     }
                 }
             )
@@ -85,9 +100,9 @@ fun PostDetailScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // ---- 需求四：AI 总结，放在最上方 ----
+            // ---------- 1. AI 总结（保留在顶部） ----------
             SummaryCard(
                 summary = state.summary,
                 loading = state.summaryLoading,
@@ -95,40 +110,10 @@ fun PostDetailScreen(
                 onRetry = onRetrySummary
             )
 
-            AuthorRow(post, avatarSize = 42)
+            // ---------- 2. 主贴（楼主） ----------
+            MainPostCard(post = post, opFloor = mainFloor)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Tag("时间 " + TimeFormat.humanize(post.createdAt))
-                Tag("来自${post.forumName}吧", highlight = true)
-            }
-
-            HorizontalDivider()
-
-            if (post.title.isNotBlank()) {
-                Text(
-                    text = post.title,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    lineHeight = 26.sp
-                )
-            }
-
-            // 摘要正文：不设 maxLines，完整展示
-            Text(
-                text = post.content.ifBlank { "（正文为空或需进入原帖查看）" },
-                fontSize = 15.sp,
-                lineHeight = 24.sp
-            )
-
-            if (post.mayBeTruncated) {
-                Text(
-                    text = "提示：搜索接口只返回摘要，上面这段正文可能被截断。" +
-                        "点下面的按钮可以抓取完整正文（AI 总结的输入也会更完整）。",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
+            // ---------- 3. 加载完整正文 ----------
             Button(
                 onClick = onLoadFull,
                 enabled = !state.isLoadingDetail,
@@ -139,27 +124,40 @@ fun PostDetailScreen(
                     Spacer(Modifier.width(8.dp))
                     Text("正在抓取…")
                 } else {
-                    Text("加载完整正文")
+                    Text(if (floors.isEmpty()) "加载完整正文与回复" else "重新加载完整正文")
                 }
             }
 
-            state.detailMessage?.let {
-                Text(
-                    text = it,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            state.detailMessage?.let { msg ->
+                // 用 SelectionContainer 包起来，诊断文本可以直接长按复制
+                SelectionContainer {
+                    Text(
+                        text = msg,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            // ---- 完整楼层 ----
-            if (state.detailFloors.isNotEmpty()) {
-                HorizontalDivider()
-                Text(
-                    text = "完整内容（共 ${state.detailFloors.size} 层）",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                state.detailFloors.forEach { floor -> FloorBlock(floor) }
+            // ---------- 4. 回复楼层 ----------
+            when {
+                replies.isNotEmpty() -> {
+                    Text(
+                        text = "回复（${replies.size} 层）· 楼层号按解析顺序编号",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    replies.forEach { floor -> FloorCard(floor) }
+                }
+
+                floors.isNotEmpty() -> {
+                    Text(
+                        text = "这个帖子只有主楼，没有解析到其他回复层。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             HorizontalDivider()
@@ -170,7 +168,7 @@ fun PostDetailScreen(
                 Tag("tid ${post.threadId}")
             }
 
-            // ---- 醒目的「打开原帖」大按钮（只响应用户点击，不自动跳转） ----
+            // ---------- 5. 打开原帖（只响应用户点击，不自动跳转） ----------
             Button(
                 onClick = { UrlOpener.open(context, post.webUrl) },
                 modifier = Modifier
@@ -180,11 +178,13 @@ fun PostDetailScreen(
                 Text("在浏览器中打开原帖", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
 
-            Text(
-                text = post.webUrl,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            SelectionContainer {
+                Text(
+                    text = post.webUrl,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Spacer(Modifier.height(8.dp))
         }
@@ -192,11 +192,147 @@ fun PostDetailScreen(
 }
 
 /**
- * AI 总结卡片（需求四）。
+ * 主贴卡片（楼主正文）。
+ *
+ * 优先用「加载完整正文」抓回来的主楼内容；
+ * 还没抓或抓不到时退回搜索接口给的摘要，并明确告诉你这只是摘要。
+ */
+@Composable
+private fun MainPostCard(post: TiebaPost, opFloor: TiebaFloor?) {
+    val content = opFloor?.content?.takeIf { it.isNotBlank() } ?: post.content
+    val authorName = opFloor?.authorName?.takeIf { it.isNotBlank() } ?: post.authorDisplay
+    val avatar = opFloor?.avatarUrl ?: post.avatarUrl
+    val time = opFloor?.createdAt ?: post.createdAt
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Tag("主贴", highlight = true)
+                Tag("来自${post.forumName}吧")
+            }
+
+            if (post.title.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = post.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    lineHeight = 26.sp
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Avatar(avatar, 32)
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = authorName,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = TimeFormat.humanize(time),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (opFloor != null) {
+                    Tag("#${opFloor.floorNumber ?: 1}")
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(10.dp))
+
+            // 需求三：主贴超 500 字折叠起来，别撑满屏幕
+            CollapsibleText(
+                text = content.ifBlank { "（正文为空或需进入原帖查看）" },
+                collapseThreshold = 500,
+                collapsedChars = 350
+            )
+
+            if (opFloor == null && post.mayBeTruncated) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "↑ 这是搜索接口返回的摘要，可能不完整。点下方「加载完整正文与回复」抓取全文。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/** 单层回复卡片：楼层号 + 发帖人 + 时间 + 内容 */
+@Composable
+private fun FloorCard(floor: TiebaFloor) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Avatar(floor.avatarUrl, 32)
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = floor.authorName.ifBlank { "（用户名不可见）" },
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp
+                        )
+                        if (floor.isOp) {
+                            Spacer(Modifier.width(6.dp))
+                            Tag("楼主", highlight = true)
+                        }
+                    }
+                    Text(
+                        text = TimeFormat.humanize(floor.createdAt),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Tag("#${floor.floorNumber ?: "?"}")
+            }
+
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+
+            // 需求三：单层超 500 字折叠
+            CollapsibleText(
+                text = floor.content,
+                collapseThreshold = 500,
+                collapsedChars = 300,
+                fontSize = 14.sp,
+                lineHeight = 21.sp
+            )
+
+            floor.floorId?.let { pid ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "pid $pid",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * AI 总结卡片（需求四，保留）。
  *
  * 三种状态：加载中 / 有结果 / 出错（通常是没配 Key 或 Key 无效）。
- * 出错时允许手动重试 —— 但**只要缓存里已有结果就不会重复调 API**，
- * 这是用户明确要求的「同一个帖子只调用一次」。
+ * 出错时允许手动重试 —— 但**只要缓存里已有结果就不会重复调 API**。
  */
 @Composable
 private fun SummaryCard(
@@ -250,7 +386,6 @@ private fun SummaryCard(
                         lineHeight = 22.sp,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
-                    // 缓存说明：让用户确信不会重复扣费
                     Spacer(Modifier.height(6.dp))
                     Text(
                         text = "该总结已缓存，再次打开本帖不会再调用 API",
@@ -267,40 +402,5 @@ private fun SummaryCard(
                 )
             }
         }
-    }
-}
-
-/** 单层楼层/回复的展示块 */
-@Composable
-private fun FloorBlock(floor: TiebaFloor) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = floor.authorName.ifBlank { "（用户名不可见）" },
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 13.sp
-            )
-            if (floor.isOp) {
-                Spacer(Modifier.width(6.dp))
-                Tag("楼主", highlight = true)
-            }
-        }
-        Text(
-            text = TimeFormat.humanize(floor.createdAt),
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = floor.content,
-            fontSize = 14.sp,
-            lineHeight = 21.sp
-        )
     }
 }

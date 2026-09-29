@@ -16,14 +16,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -35,7 +41,26 @@ import com.example.tiebasearch.util.TextSegmenter
  * 放在一起是为了避免两处各写一份、以后改一处漏一处。
  */
 
-/** 小标签，例如「时间 今天 21:00」「来自yy小说吧」 */
+/** 圆形头像。url 为空就显示一个灰底占位圈 */
+@Composable
+internal fun Avatar(url: String?, size: Int = 36) {
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        if (!url.isNullOrBlank()) {
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+/** 小标签，例如「时间 今天 21:00」「来自yy小说吧」「#3」 */
 @Composable
 internal fun Tag(text: String, highlight: Boolean = false) {
     val bg = if (highlight) MaterialTheme.colorScheme.primaryContainer
@@ -55,24 +80,11 @@ internal fun Tag(text: String, highlight: Boolean = false) {
     )
 }
 
-/** 头像 + 昵称 + 用户名/UID。列表和详情页都要展示【发帖人】，所以抽出来 */
+/** 头像 + 昵称 + 用户名/UID。搜索结果卡片用 */
 @Composable
 internal fun AuthorRow(post: TiebaPost, avatarSize: Int = 36) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(avatarSize.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            if (post.avatarUrl.isNotBlank()) {
-                AsyncImage(
-                    model = post.avatarUrl,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
+        Avatar(post.avatarUrl, avatarSize)
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -121,7 +133,43 @@ internal fun MessageStrip(text: String, bg: Color, onDismiss: () -> Unit) {
 }
 
 /**
- * 需求三：长内容「智能分段」展示。
+ * 长内容折叠（需求三）。
+ *
+ * 超过 [collapseThreshold] 字就先截断，配一个「展开全文」按钮，别让一层楼撑满整屏。
+ * 用 rememberSaveable 记住展开状态，转屏不会又折回去。
+ */
+@Composable
+internal fun CollapsibleText(
+    text: String,
+    collapseThreshold: Int = 500,
+    collapsedChars: Int = 300,
+    fontSize: TextUnit = 15.sp,
+    lineHeight: TextUnit = 24.sp
+) {
+    val needCollapse = text.length > collapseThreshold
+    var expanded by rememberSaveable(text) { mutableStateOf(false) }
+
+    if (!needCollapse || expanded) {
+        Text(text = text, fontSize = fontSize, lineHeight = lineHeight)
+        if (needCollapse) {
+            TextButton(onClick = { expanded = false }) {
+                Text("收起", fontSize = 12.sp)
+            }
+        }
+    } else {
+        Text(
+            text = text.take(collapsedChars).trimEnd() + "……",
+            fontSize = fontSize,
+            lineHeight = lineHeight
+        )
+        TextButton(onClick = { expanded = true }) {
+            Text("展开全文（共 ${text.length} 字）", fontSize = 12.sp)
+        }
+    }
+}
+
+/**
+ * 需求三（列表用）：长内容「智能分段」展示。
  *
  * 超过 [maxCharsPerBox] 的内容会被切成多个独立的小框，而不是堆成一大坨，
  * 排版上更接近「一段一段读」的体验。切分位置优先落在段落、句号等语义边界上，

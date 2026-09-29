@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.tiebasearch.data.remote.TiebaApi
 import com.example.tiebasearch.data.remote.TiebaBlockedException
 import com.example.tiebasearch.data.remote.TiebaHttp
+import com.example.tiebasearch.data.parser.MoHtmlParser
 import com.example.tiebasearch.data.repository.SummaryRepository
 import com.example.tiebasearch.data.repository.TiebaRepository
 import com.example.tiebasearch.domain.model.Forums
@@ -306,6 +307,55 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(
                         isLoadingDetail = false,
                         detailMessage = "加载失败：${e.message ?: e.javaClass.simpleName}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 结构诊断：把帖子页的「解析指纹」导出。
+     *
+     * 为什么需要它：楼层解析靠的是结构特征（头像 + 作者链 + 时间），不是写死的 class 名。
+     * 万一贴吧改版导致解析不出楼层，光知道「解析不出来」没法定位。
+     * 这个方法会输出一段**很短**的文本（出现最多的 class + 次数 + 各锚点数量），
+     * 复制发给我就能知道该换成什么选择器 —— 不用把几百 KB 的 HTML 传出来。
+     */
+    fun exportThreadDiagnostics() {
+        val post = _state.value.selectedPost ?: return
+        if (_state.value.isLoadingDetail) return
+        if (post.threadId <= 0) {
+            _state.update { it.copy(detailMessage = "这条结果没有有效的 tid，无法做结构诊断。") }
+            return
+        }
+
+        _state.update { it.copy(isLoadingDetail = true, detailMessage = "正在下载帖子页做结构诊断…") }
+
+        viewModelScope.launch {
+            try {
+                val html = api.threadFloorsHtml(post.threadId.toString(), 1)
+                val fingerprint = MoHtmlParser.structureFingerprint(html)
+                val saved = DebugDumper.dump(
+                    getApplication<Application>(),
+                    "thread_${post.threadId}",
+                    html
+                )
+                _state.update {
+                    it.copy(
+                        isLoadingDetail = false,
+                        detailMessage = buildString {
+                            append("—— 结构诊断（可长按复制发我）——\n")
+                            append(fingerprint)
+                            append("\n原始 HTML 已保存到：")
+                            append(saved?.absolutePath ?: "导出失败")
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        isLoadingDetail = false,
+                        detailMessage = "结构诊断失败：${e.message ?: e.javaClass.simpleName}"
                     )
                 }
             }
