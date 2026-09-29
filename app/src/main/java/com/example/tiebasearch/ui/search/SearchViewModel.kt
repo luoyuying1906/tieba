@@ -6,9 +6,12 @@ import androidx.lifecycle.viewModelScope
 import com.example.tiebasearch.data.remote.TiebaApi
 import com.example.tiebasearch.data.remote.TiebaBlockedException
 import com.example.tiebasearch.data.remote.TiebaHttp
+import com.example.tiebasearch.data.repository.SummaryRepository
 import com.example.tiebasearch.data.repository.TiebaRepository
+import com.example.tiebasearch.domain.model.Forums
 import com.example.tiebasearch.domain.model.TiebaFloor
 import com.example.tiebasearch.domain.model.TiebaPost
+import com.example.tiebasearch.domain.model.TimeRange
 import com.example.tiebasearch.util.DebugDumper
 import com.example.tiebasearch.util.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,24 +22,43 @@ import kotlinx.coroutines.launch
 
 data class SearchUiState(
     val keywordInput: String = "",
+
     /** 请求间隔（毫秒），可在界面上调 */
     val intervalMs: Long = SettingsStore.DEFAULT,
+
+    /** 当前勾选的吧（不带「吧」字）。默认全选 */
+    val selectedForums: Set<String> = Forums.ALL.toSet(),
+
+    /** 时间过滤范围。默认近3年 */
+    val timeRange: TimeRange = TimeRange.DEFAULT,
+
+    /** DeepSeek API Key 输入框的当前内容 */
+    val deepSeekKeyInput: String = "",
+
     val posts: List<TiebaPost> = emptyList(),
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
     val hasMore: Boolean = false,
-    val page: Int = 0,
+    /** 下次 loadMore 该从哪个全网页码继续 */
+    val nextPage: Int = 1,
     val error: String? = null,
-    /** 中性提示：本页拿到多少条、是否触发了降级 */
+    /** 中性提示：扫描了几页、筛出几条、是否走了兜底 */
     val notice: String? = null,
 
-    // ---- 详情页状态 ----
+    // ---- 详情页 ----
     val selectedPost: TiebaPost? = null,
     val detailFloors: List<TiebaFloor> = emptyList(),
     val isLoadingDetail: Boolean = false,
-    val detailMessage: String? = null
+    val detailMessage: String? = null,
+
+    // ---- AI 总结 ----
+    val summary: String? = null,
+    val summaryLoading: Boolean = false,
+    val summaryError: String? = null
 ) {
-    val canSearch: Boolean get() = keywordInput.isNotBlank() && !isLoading
+    val canSearch: Boolean
+        get() = keywordInput.isNotBlank() && !isLoading && selectedForums.isNotEmpty()
+
     val inDetail: Boolean get() = selectedPost != null
 }
 
@@ -44,10 +66,16 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = TiebaRepository()
     private val api = TiebaApi()
+    private val summaryRepo = SummaryRepository(app)
     private val settings = SettingsStore(app)
 
     private val _state = MutableStateFlow(
-        SearchUiState(intervalMs = settings.requestIntervalMs)
+        SearchUiState(
+            intervalMs = settings.requestIntervalMs,
+            selectedForums = settings.selectedForums,
+            timeRange = settings.timeRange,
+            deepSeekKeyInput = settings.deepSeekApiKey
+        )
     )
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
 
@@ -71,48 +99,77 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(intervalMs = clamped) }
     }
 
+    /** 勾选/取消某个吧（需求二的多选） */
+    fun onToggleForum(forum: String) {
+        val current = _state.value.selectedForums
+        val next = if (forum in current) current - forum else current + forum
+        settings.selectedForums = next
+        _state.update { it.copy(selectedForums = next) }
+    }
+
+    fun onSelectAllForums() {
+        val next = Forums.ALL.toSet()
+        settings.selectedForums = next
+        _state.update { it.copy(selectedForums = next) }
+    }
+
+    /** 切换时间过滤范围（需求五）。立即持久化，下次打开还是这个选择 */
+    fun onTimeRangeChange(range: TimeRange) {
+        settings.timeRange = range
+        _state.update { it.copy(timeRange = range) }
+    }
+
+    /** DeepSeek Key 边输边存，省得用户忘了保存 */
+    fun onDeepSeekKeyChange(v: String) {
+        settings.deepSeekApiKey = v
+        _state.update { it.copy(deepSeekKeyInput = v) }
+    }
+
     fun dismissMessages() = _state.update { it.copy(error = null, notice = null) }
 
     // ------------------------------------------------------------ 搜索
 
-    /** 重新搜索（回到第 1 页） */
     fun search() {
-        val keyword = _state.value.keywordInput
-        if (keyword.isBlank()) return
+        val s = _state.value
+        if (s.keywordInput.isBlank() || s.selectedForums.isEmpty()) return
 
         _state.update {
             it.copy(
-                posts = emptyList(), page = 0, hasMore = false,
+                posts = emptyList(), nextPage = 1, hasMore = false,
                 isLoading = true, error = null, notice = null
             )
         }
-        loadPage(page = 1, append = false, keyword = keyword)
+        loadPage(page = 1, append = false)
     }
 
-    /** 上拉加载下一页 */
     fun loadMore() {
         val s = _state.value
         if (s.isLoading || s.isLoadingMore || !s.hasMore) return
         _state.update { it.copy(isLoadingMore = true) }
-        loadPage(page = s.page + 1, append = true, keyword = s.keywordInput)
+        loadPage(page = s.nextPage, append = true)
     }
 
-    private fun loadPage(page: Int, append: Boolean, keyword: String) {
+    private fun loadPage(page: Int, append: Boolean) {
+        val s = _state.value
         viewModelScope.launch {
             try {
-                val result = repo.search(keyword, page)
+                val result = repo.search(s.keywordInput, s.selectedForums, s.timeRange, page)
 
-                val notice = if (result.rawCount > result.posts.size) {
-                    "本页接口返回 ${result.rawCount} 条，去重后 ${result.posts.size} 条"
+                val notice = if (result.usedTitleFallback) {
+                    "全网搜索（${s.timeRange.label}）在这几个吧里没有命中，" +
+                        "已改用「吧内标题检索」兜底。注意：兜底只匹配标题，正文含关键词的会漏掉。"
                 } else {
-                    "本页 ${result.posts.size} 条"
+                    "扫描 ${result.scannedPages} 页全网数据（共 ${result.rawCount} 条），" +
+                        "按「${s.timeRange.label}」+ 所选 ${s.selectedForums.size} 个吧" +
+                        "筛出 ${result.posts.size} 条" +
+                        "（吧名剔除 ${result.droppedByForum} 条，时间剔除 ${result.droppedByTime} 条）"
                 }
 
                 _state.update { st ->
                     st.copy(
                         posts = if (append) st.posts + result.posts else result.posts,
                         hasMore = result.hasMore,
-                        page = page,
+                        nextPage = result.nextPage,
                         isLoading = false,
                         isLoadingMore = false,
                         notice = notice,
@@ -120,11 +177,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             } catch (e: TiebaBlockedException) {
-                fail(
-                    append = append,
-                    msg = e.message ?: "触发百度安全验证",
-                    hintRateLimit = true
-                )
+                fail(append, e.message ?: "触发百度安全验证", hintRateLimit = true)
             } catch (e: Exception) {
                 fail(append, e.message ?: e.javaClass.simpleName)
             }
@@ -133,7 +186,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun fail(append: Boolean, msg: String, hintRateLimit: Boolean = false) {
         val extra = if (hintRateLimit) {
-            "\n建议把上方「请求间隔」调大（当前 ${TiebaHttp.minIntervalMs}ms）后重试。"
+            "\n建议把「请求间隔」调大（当前 ${TiebaHttp.minIntervalMs}ms）后重试。"
         } else ""
         _state.update {
             it.copy(
@@ -145,24 +198,85 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ------------------------------------------------------------ 详情页
+    // ------------------------------------------------------------ 详情页 + AI 总结
 
-    /** 点「展开全文」→ 进入详情页 */
+    /** 点「展开全文」→ 进入详情页，并**自动**触发 AI 总结（命中缓存则不调 API） */
     fun openDetail(post: TiebaPost) {
+        val cached = summaryRepo.cached(post.threadId)
         _state.update {
-            it.copy(selectedPost = post, detailFloors = emptyList(), detailMessage = null)
+            it.copy(
+                selectedPost = post,
+                detailFloors = emptyList(),
+                detailMessage = null,
+                summary = cached,
+                summaryError = null,
+                summaryLoading = false
+            )
         }
+        if (cached == null) autoSummarize(post)
     }
 
     fun closeDetail() {
         _state.update {
-            it.copy(selectedPost = null, detailFloors = emptyList(), detailMessage = null)
+            it.copy(
+                selectedPost = null,
+                detailFloors = emptyList(),
+                detailMessage = null,
+                summary = null,
+                summaryError = null,
+                summaryLoading = false
+            )
+        }
+    }
+
+    private fun autoSummarize(post: TiebaPost) {
+        val key = settings.deepSeekApiKey
+        if (key.isBlank()) {
+            _state.update {
+                it.copy(summaryError = "尚未配置 DeepSeek API Key。请返回首页展开「设置」，填入后点「重新总结」。")
+            }
+            return
+        }
+        runSummarize(post, key, force = false)
+    }
+
+    /** 手动重试 / 重新生成（会跳过缓存，但结果仍写回缓存） */
+    fun retrySummary() {
+        val post = _state.value.selectedPost ?: return
+        val key = settings.deepSeekApiKey
+        if (key.isBlank()) {
+            _state.update { it.copy(summaryError = "请先在首页「设置」里填入 DeepSeek API Key") }
+            return
+        }
+        runSummarize(post, key, force = true)
+    }
+
+    private fun runSummarize(post: TiebaPost, key: String, force: Boolean) {
+        if (_state.value.summaryLoading) return
+        _state.update { it.copy(summaryLoading = true, summaryError = null) }
+        viewModelScope.launch {
+            try {
+                val text = if (force) {
+                    summaryRepo.resummarize(post, key)
+                } else {
+                    summaryRepo.summarize(post, key)
+                }
+                _state.update { it.copy(summaryLoading = false, summary = text, summaryError = null) }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        summaryLoading = false,
+                        summaryError = e.message ?: e.javaClass.simpleName
+                    )
+                }
+            }
         }
     }
 
     /**
      * 点「加载完整正文」→ 按 tid 抓帖子页。
-     * 因为搜索接口只返回截断摘要，真正想看全文必须走这一步。
+     * 抓完顺手把完整正文也交给 AI 重新总结一次会更准，但那会多花钱，
+     * 所以这里**不**自动重算；用户想重算可以点 AI 卡片上的「重新总结」。
      */
     fun loadFullThread() {
         val post = _state.value.selectedPost ?: return
@@ -181,7 +295,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                         isLoadingDetail = false,
                         detailFloors = floors,
                         detailMessage = if (floors.isEmpty()) {
-                            "帖子页没能解析出内容（页面结构可能已变）。建议直接点下方「在浏览器中打开原帖」。"
+                            "帖子页没能解析出内容（页面结构可能已变）。建议点下方「在浏览器中打开原帖」。"
                         } else {
                             "已加载 ${floors.size} 层"
                         }

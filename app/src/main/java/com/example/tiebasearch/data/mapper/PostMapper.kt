@@ -45,6 +45,36 @@ fun MoHtmlParser.Floor.toDomain(): TiebaFloor = TiebaFloor(
 )
 
 /**
+ * 吧内主题列表项 → 领域模型（「吧内标题检索」兜底路径用）。
+ *
+ * ⚠️ 诚实说明这条路径的局限：吧内列表页**只有标题**，
+ * 拿不到正文、也拿不到数字 UID，所以 content 直接用标题填充，
+ * authorUserId 为 null。这是兜底，不是主路径。
+ */
+fun MoHtmlParser.ThreadBrief.toThreadPost(forumName: String): TiebaPost {
+    val id = tid.toLongOrNull()
+    return TiebaPost(
+        postId = id ?: urlSafeHash(tid),
+        threadId = id ?: 0L,
+        title = title,
+        content = title,
+        authorUserId = null,
+        authorName = "",
+        authorNickname = authorName,
+        createdAt = epochSeconds,
+        modifiedAt = null,
+        forumName = forumName,
+        forumId = null,
+        replyCount = replyCount,
+        likeCount = 0,
+        avatarUrl = "",
+        threadUrl = "https://tieba.baidu.com/p/$tid",
+        firstImageUrl = null,
+        source = TiebaPost.DataSource.HTML_FORUM_CRAWL
+    )
+}
+
+/**
  * pid 缺失时的兜底唯一键。
  * 直接调 hashCode() 在不同进程/版本间可能不一致，所以自己算一个稳定值。
  */

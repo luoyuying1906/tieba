@@ -2,6 +2,7 @@ package com.example.tiebasearch.ui.search
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,13 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.tiebasearch.domain.model.TiebaPost
+import com.example.tiebasearch.util.TextSegmenter
 
 /**
  * 搜索结果列表与详情页共用的小组件。
  * 放在一起是为了避免两处各写一份、以后改一处漏一处。
  */
 
-/** 小标签，例如「时间 今天 21:00」「来自北京吧」 */
+/** 小标签，例如「时间 今天 21:00」「来自yy小说吧」 */
 @Composable
 internal fun Tag(text: String, highlight: Boolean = false) {
     val bg = if (highlight) MaterialTheme.colorScheme.primaryContainer
@@ -114,5 +117,54 @@ internal fun MessageStrip(text: String, bg: Color, onDismiss: () -> Unit) {
                 .padding(start = 8.dp)
                 .clickable(onClick = onDismiss)
         )
+    }
+}
+
+/**
+ * 需求三：长内容「智能分段」展示。
+ *
+ * 超过 [maxCharsPerBox] 的内容会被切成多个独立的小框，而不是堆成一大坨，
+ * 排版上更接近「一段一段读」的体验。切分位置优先落在段落、句号等语义边界上，
+ * 具体规则见 [TextSegmenter]。
+ */
+@Composable
+internal fun SegmentedContent(
+    text: String,
+    maxCharsPerBox: Int = 90,
+    maxBoxes: Int = 4
+) {
+    val segmented = remember(text, maxCharsPerBox, maxBoxes) {
+        TextSegmenter.segment(text, maxCharsPerBox, maxBoxes)
+    }
+
+    if (segmented.boxes.isEmpty()) {
+        Text(
+            text = "（正文为空或需进入原帖查看）",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        segmented.boxes.forEach { box ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(text = box, fontSize = 14.sp, lineHeight = 20.sp)
+            }
+        }
+
+        if (segmented.truncated) {
+            Text(
+                text = "…内容较长，已折叠剩余部分，点「展开全文」查看",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

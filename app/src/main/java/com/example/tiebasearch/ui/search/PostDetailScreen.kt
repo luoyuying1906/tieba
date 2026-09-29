@@ -2,6 +2,7 @@ package com.example.tiebasearch.ui.search
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -40,22 +43,23 @@ import com.example.tiebasearch.util.TimeFormat
 import com.example.tiebasearch.util.UrlOpener
 
 /**
- * 帖子详情页（需求二）。
+ * 帖子详情页。
  *
- * 两层内容，按需加载：
- *   1. 搜索接口返回的摘要 —— 进入即可见，绝不截断，整页可滚动
- *   2. 完整正文 —— 点「加载完整正文」才去抓帖子页
- *      （因为搜索接口给的就是截断摘要，光靠它看不全）
- *
- * 底部有一个整宽的「在浏览器中打开原帖」按钮（需求三），
- * 只会响应用户点击，不自动跳转。
+ * 从上到下：
+ *   1. 【需求四】AI 总结卡片 —— 进入页面即自动触发（命中缓存则不调 API）
+ *   2. 作者 / 时间 / 来源吧
+ *   3. 标题 + 正文（整页可滚动，不截断）
+ *   4. 「加载完整正文」—— 按 tid 抓帖子页，补全被接口截断的内容
+ *   5. 【需求三】完整楼层列表
+ *   6. 【需求二/三】整宽的「在浏览器中打开原帖」按钮
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PostDetailScreen(
     state: SearchUiState,
     onBack: () -> Unit,
-    onLoadFull: () -> Unit
+    onLoadFull: () -> Unit,
+    onRetrySummary: () -> Unit
 ) {
     val post = state.selectedPost ?: return
     val context = LocalContext.current
@@ -79,11 +83,18 @@ fun PostDetailScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                // 整页可滚动 —— 这是需求二「内容看不全」的第一层修复
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // ---- 需求四：AI 总结，放在最上方 ----
+            SummaryCard(
+                summary = state.summary,
+                loading = state.summaryLoading,
+                error = state.summaryError,
+                onRetry = onRetrySummary
+            )
+
             AuthorRow(post, avatarSize = 42)
 
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -111,7 +122,8 @@ fun PostDetailScreen(
 
             if (post.mayBeTruncated) {
                 Text(
-                    text = "提示：搜索接口只返回摘要，上面这段正文可能被截断。点下面的按钮可以抓取完整正文。",
+                    text = "提示：搜索接口只返回摘要，上面这段正文可能被截断。" +
+                        "点下面的按钮可以抓取完整正文（AI 总结的输入也会更完整）。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -158,7 +170,7 @@ fun PostDetailScreen(
                 Tag("tid ${post.threadId}")
             }
 
-            // ---- 需求三：醒目的「打开原帖」大按钮 ----
+            // ---- 醒目的「打开原帖」大按钮（只响应用户点击，不自动跳转） ----
             Button(
                 onClick = { UrlOpener.open(context, post.webUrl) },
                 modifier = Modifier
@@ -179,7 +191,86 @@ fun PostDetailScreen(
     }
 }
 
-/** 单层楼中楼/回复的展示块 */
+/**
+ * AI 总结卡片（需求四）。
+ *
+ * 三种状态：加载中 / 有结果 / 出错（通常是没配 Key 或 Key 无效）。
+ * 出错时允许手动重试 —— 但**只要缓存里已有结果就不会重复调 API**，
+ * 这是用户明确要求的「同一个帖子只调用一次」。
+ */
+@Composable
+private fun SummaryCard(
+    summary: String?,
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "🤖 AI 总结",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(Modifier.weight(1f))
+                if (!loading) {
+                    Text(
+                        text = "重新总结",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.clickable(onClick = onRetry)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            when {
+                loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "正在调用 DeepSeek 生成总结…",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                !summary.isNullOrBlank() -> {
+                    Text(
+                        text = summary,
+                        fontSize = 14.sp,
+                        lineHeight = 22.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    // 缓存说明：让用户确信不会重复扣费
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "该总结已缓存，再次打开本帖不会再调用 API",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                else -> Text(
+                    text = error ?: "尚未生成总结",
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+/** 单层楼层/回复的展示块 */
 @Composable
 private fun FloorBlock(floor: TiebaFloor) {
     Column(
